@@ -22,3 +22,13 @@
 - *Need to see how nodes are selected for training and testing in inductive setting*
 - Need to plot inference times vs accuracy for different baselines(NOSMOG, GLNN, GNN)
 - Ablation study - plug and play different components of the loss function and see how it affects the performance of the model
+
+# Roadmap:
+April 5th - April 6th
+
+- Study features of datasets (Everyone)
+- Implement teacher network architecture and training along with flags for datasets and teacher model architecture (Chanikya and Nithin)
+- eg: python3 train_teacher.py --dataset=cora --model=SAGE --epochs-100 --lr=0.01 . Add flags for other hyperparameters if necessary (Chanikya and Nithin)
+- Other teacher model architectures - GCN, GAT, APPNP (Chanikya and Nithin + others based on availability)
+- Implement student network architecture along with deepwalk (position features). see how the position features are generated. (Lokesh and Hemanth)
+
