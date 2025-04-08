@@ -32,3 +32,8 @@ April 5th - April 6th
 - Other teacher model architectures - GCN, GAT, APPNP (Chanikya and Nithin + others based on availability)
 - Implement student network architecture along with deepwalk (position features). see how the position features are generated. (Lokesh and Hemanth)
 
+
+
+# Ablation studies
+- Just MLP with node content features and no position features (MLP in the experiments section of paper)
+- MLP with node content features and position features with only cross entropy loss (not there in paper but still is giving huge jump in accuracy)
