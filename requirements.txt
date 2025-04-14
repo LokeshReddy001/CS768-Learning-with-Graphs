@@ -2,3 +2,6 @@ torch
 torch_geometric
 scipy
 fasttext
+torch-scatter -f https://data.pyg.org/whl/torch-2.5.1+cu121.html
+torch-sparse -f https://data.pyg.org/whl/torch-2.5.1+cu121.html
+pyg-lib -f https://data.pyg.org/whl/torch-2.5.1+cu121.html
