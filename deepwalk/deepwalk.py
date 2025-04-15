@@ -49,7 +49,7 @@ class DeepWalk:
                 minCount=0,
                 neg=0,
                 loss='hs',
-                thread=4,
+                thread=8,
                 minn=0, maxn=0
             )
 
