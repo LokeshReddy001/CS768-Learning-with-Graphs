@@ -51,4 +51,21 @@ edge_index, features, labels, train_mask, val_idx, test_idx, ind_edge_index, obs
 
 data = add_inductive_settings(data, 0.2)
 
+def main():
+    parser = argparse.ArgumentParser(description="Teacher implementation")
+    parser.add_argument('--num_runs', type=int, default=1, help='Number of runs')
+    parser.add_argument('--setting', type=str, choices=['trans', 'ind'], default='trans', help='Setting type: trans or ind')
+    parser.add_argument('--data_path', type=str, required=True, help='Path to the dataset')
+    parser.add_argument('--model_name', type=str, default='SAGE', help='Name of the model(SAGE, GCN, GAT, APPNP)')
+    parser.add_argument('--num_layers', type=int, default=2, help='Number of layers in the model')
+    parser.add_argument('--hidden_dim', type=int, default=128, help='Hidden dimension size')
+    parser.add_argument('--drop_out', type=float, default=0, help='Dropout rate')
+    parser.add_argument('--batch_sz', type=int, default=32, help='Batch size')
+    parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate')
+    parser.add_argument('--output_path', type=str, default='./output', help='Path to save output')
+    
+    args = parser.parse_args()
 
+
+if __name__ == "__main__":
+    main()
