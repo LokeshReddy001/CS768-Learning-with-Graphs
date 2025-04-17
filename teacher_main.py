@@ -19,6 +19,7 @@ def add_inductive_settings(data, spr=0.2):
 
     num_unlabeled = len(unlabeled_indices)
     num_inductive = int(spr * num_unlabeled)
+
     perm = torch.randperm(num_unlabeled)
     inductive_indices = unlabeled_indices[perm[:num_inductive]]
     observed_indices = unlabeled_indices[perm[num_inductive:]]
@@ -36,15 +37,17 @@ def add_inductive_settings(data, spr=0.2):
 
     return data
 
-def load_data(dataset):
-    if dataset == "cora":
-        dataset = Planetoid(root='./Cora', name='Cora')
-        data = add_inductive_settings(dataset[0])
+def load_data(dataset, setting="tran"):
+        data = dataset[0]
+        data.ind_edge_index = []
+        data.observed_mask = []
+        data.inductive_mask = []
+        test_mask = data.test_mask
+        if setting=="ind":
+            data = add_inductive_settings(data)
+            test_mask = data.inductive_mask
         
-        features = data.x
-        labels = data.y
-        
-        return data.edge_index, features, labels, data.train_mask, data.val_mask, data.test_mask, data.ind_edge_index, data.observed_mask, data.inductive_mask
+        return dataset.num_features, dataset.num_classes, data.x, data.y, data.edge_index,  data.ind_edge_index, data.train_mask, data.val_mask, test_mask
 
 edge_index, features, labels, train_mask, val_idx, test_idx, ind_edge_index, obs_mask, ind_mask  = load_data("cora")
 # edge_index, features, labels, train_mask, val_idx, test_idx  = load_data("cora")
