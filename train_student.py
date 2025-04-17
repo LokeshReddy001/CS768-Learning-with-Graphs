@@ -6,12 +6,9 @@ from models import MLP
 import networkx as nx
 from torch_geometric.datasets import Planetoid
 import argparse
-
-def get_data(dataset_name):
-    if dataset_name not in ['Cora', 'Citeseer', 'Pubmed']:
-        raise ValueError("Dataset must be one of ['Cora', 'Citeseer', 'Pubmed']")
-    dataset = Planetoid(root='./tmp/' + dataset_name, name=dataset_name)
-    return dataset
+from utils import get_data
+import yaml
+import os
 
 def pgd_delta(model, feats, labels, train_mask, eps=0.05, iters=5):
     alpha = eps / 4
@@ -124,7 +121,8 @@ def main():
                         help='Dataset name (default: Cora)')
     parser.add_argument('--mode', type=str, default='inductive', choices=['inductive', 'transductive'],
                         help='Training mode (default: inductive)')
-    
+    parser.add_argument('--teacher', type=str, default='SAGE', choices=['SAGE', 'GCN', 'GAT', 'APPNP'],
+                        help='Teacher model type (default: SAGE)')
     # Model configuration
     parser.add_argument('--num_layers', type=int, default=3, help='Number of MLP layers (default: 3)')
     parser.add_argument('--hidden_dim', type=int, default=64, help='Hidden dimension size (default: 64)')
@@ -133,28 +131,26 @@ def main():
     parser.add_argument('--walk_length', type=int, default=80, help='Length of random walks (default: 80)')
     parser.add_argument('--walks_per_vertex', type=int, default=10,
                         help='Number of walks per vertex (default: 10)')
-    
+    parser.add_argument('--seed', type=int, default=1234, help='Random seed (default: 1234)')
     # Training parameters
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate (default: 0.01)')
     parser.add_argument('--weight_decay', type=float, default=5e-4, help='Weight decay (default: 5e-4)')
     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs (default: 200)')
-    parser.add_argument('--print_interval', type=int, default=10, 
-                        help='Interval for printing results (default: 10)')
+    parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (default: 10)')
+    parser.add_argument('--eval_every', type=int, default=5, help='Evaluate every N epochs (default: 5)')
     
     # Teacher model paths
-    parser.add_argument('--teacher_emb_path', type=str, default='teacher_outputs/embeddings.pt',
-                        help='Path to teacher embeddings (default: teacher_outputs/embeddings.pt)')
-    parser.add_argument('--teacher_out_path', type=str, default='teacher_outputs/label_scores.pt',
-                        help='Path to teacher outputs (default: teacher_outputs/label_scores.pt)')
+    parser.add_argument('--teacher_outs', type=str, default='teacher_outputs',
+                        help='Path to base folder of teacher outputs (default: teacher_outputs)')
     
     # Loss weights
     parser.add_argument('--gt_weight', type=float, default=1.0, 
                         help='Weight for ground truth loss (default: 1.0)')
     parser.add_argument('--sl_weight', type=float, default=0.5, 
                         help='Weight for soft label loss (default: 0.5)')
-    parser.add_argument('--rsd_weight', type=float, default=0.0, 
+    parser.add_argument('--rsd_weight', type=float, default=0.1, 
                         help='Weight for representational similarity loss (default: 0.0)')
-    parser.add_argument('--adv_weight', type=float, default=0.5, 
+    parser.add_argument('--adv_weight', type=float, default=0.3, 
                         help='Weight for adversarial loss (default: 0.5)')
     
     # Adversarial training parameters
@@ -187,23 +183,21 @@ def main():
     print(f"Running in {args.mode} mode on {args.dataset} dataset")
     
     # Get dataset
-    dataset = get_data(args.dataset)
-    data = dataset[0]
-    
-    # Prepare inductive setup if needed
+    data = get_data(args.dataset, setting=args.mode, seed=args.seed)
+    torch.manual_seed(args.seed)
+
+    # Load teacher outputs
+    teacher_emb_path = os.path.join(args.teacher_outs, f"dataset_{args.dataset}_model_{args.teacher}_mode_{args.mode}_seed_{args.seed}_embeddings.pt")
+    teacher_logits_path = os.path.join(args.teacher_outs, f"dataset_{args.dataset}_model_{args.teacher}_mode_{args.mode}_seed_{args.seed}_logits.pt")
+
+    try:
+        teacher_emb = torch.load(teacher_emb_path, map_location=device)
+        teacher_out = torch.load(teacher_logits_path, map_location=device)
+    except FileNotFoundError:
+        print(f"Teacher outputs not found at {teacher_emb_path} or {teacher_logits_path}. Exiting.")
+        return
+
     if args.mode == 'inductive':
-        test_indices = data.test_mask.nonzero(as_tuple=True)[0]
-        num_test = test_indices.size(0)
-        perm = torch.randperm(num_test)
-        split = int(args.test_split_ratio * num_test)
-        tran_indices = test_indices[perm[:split]]
-        ind_indices = test_indices[perm[split:]]
-
-        data.test_tran_mask = torch.zeros_like(data.test_mask)
-        data.test_ind_mask = torch.zeros_like(data.test_mask)
-        data.test_tran_mask[tran_indices] = True
-        data.test_ind_mask[ind_indices] = True
-
         trans_nodes_mask = ~data.test_ind_mask
     else:
         trans_nodes_mask = None
@@ -224,46 +218,83 @@ def main():
              input_feat_dim=data.x.shape[1],
              position_emb_dim=position_embeddings.shape[1],
              hidden_dim=args.hidden_dim,
-             output_dim=dataset.num_classes)
+             output_dim=data.num_classes)
     
     mlp = mlp.to(device)
     data = data.to(device)
     position_embeddings = torch.tensor(position_embeddings).to(device)
     optimizer = torch.optim.Adam(mlp.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     
-    # Load teacher outputs
-    print(f"Loading teacher outputs from {args.teacher_emb_path} and {args.teacher_out_path}")
-    teacher_emb = torch.load(args.teacher_emb_path, map_location=device)
-    teacher_out = torch.load(args.teacher_out_path, map_location=device)
-    
-    # Training loop
+    patience = args.patience
+    patience_counter = 0
+    best_val_acc = 0
+    best_model_state = None
+    best_epoch = 0
+
     for epoch in range(1, args.epochs + 1):
         loss = train(mlp, optimizer, data, position_embeddings, teacher_emb, teacher_out, 
                    args.mode, args.gt_weight, args.sl_weight, args.rsd_weight, args.adv_weight,
                    args.temperature, device, trans_nodes_mask)
         
-        if args.mode == 'inductive':
-            train_acc, val_acc, test_tran_acc, test_ind_acc = test(mlp, data, position_embeddings, device, args.mode)
-            if epoch % args.print_interval == 0 or epoch == 1:
-                print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, '
-                    f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '
-                    f'Test Tran Acc: {test_tran_acc:.4f}, Test Ind Acc: {test_ind_acc:.4f}')
-        else:
-            train_acc, val_acc, test_acc = test(mlp, data, position_embeddings, device, args.mode)
-            if epoch % args.print_interval == 0 or epoch == 1:
-                print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, '
-                    f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+        # Evaluate every args.eval_every epochs or on first and last epoch
+        if epoch % args.eval_every == 0 or epoch == 1 or epoch == args.epochs:
+            if args.mode == 'inductive':
+                train_acc, val_acc, test_tran_acc, test_ind_acc = test(mlp, data, position_embeddings, device, args.mode)
+                
+                # Store best model state based on validation accuracy
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_model_state = {key: value.cpu().clone() for key, value in mlp.state_dict().items()}
+                    best_epoch = epoch
+                    patience_counter = 0
+                    print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, '
+                          f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f} (BEST), '
+                          f'Test Tran Acc: {test_tran_acc:.4f}, Test Ind Acc: {test_ind_acc:.4f}')
+                else:
+                    patience_counter += 1
+                    print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, '
+                          f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '
+                          f'Test Tran Acc: {test_tran_acc:.4f}, Test Ind Acc: {test_ind_acc:.4f}, '
+                          f'No improvement, patience: {patience_counter}/{patience}')
+            else:
+                train_acc, val_acc, test_acc = test(mlp, data, position_embeddings, device, args.mode)
+                
+                # Store best model state based on validation accuracy
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_model_state = {key: value.cpu().clone() for key, value in mlp.state_dict().items()}
+                    best_epoch = epoch
+                    patience_counter = 0
+                    print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, '
+                          f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f} (BEST), '
+                          f'Test Acc: {test_acc:.4f}')
+                else:
+                    patience_counter += 1
+                    print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, '
+                          f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '
+                          f'Test Acc: {test_acc:.4f}, '
+                          f'No improvement, patience: {patience_counter}/{patience}')
+            
+            # Early stopping
+            if patience_counter >= patience:
+                print(f"Early stopping triggered after epoch {epoch}")
+                break
     
-    # Final evaluation
+    # Load best model state for final evaluation
+    if best_model_state is not None:
+        mlp.load_state_dict(best_model_state)
+        print(f"\nLoaded best model from epoch {best_epoch} with validation accuracy: {best_val_acc:.4f}")
+    
+    # Final evaluation with best model
+    print('\nFinal results:')
     if args.mode == 'inductive':
         train_acc, val_acc, test_tran_acc, test_ind_acc = test(mlp, data, position_embeddings, device, args.mode)
-        print('\nFinal results:')
         print(f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '
               f'Test Tran Acc: {test_tran_acc:.4f}, Test Ind Acc: {test_ind_acc:.4f}')
     else:
         train_acc, val_acc, test_acc = test(mlp, data, position_embeddings, device, args.mode)
-        print('\nFinal results:')
         print(f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}')
+    
 
 if __name__ == '__main__':
     main()

@@ -2,3 +2,5 @@ torch
 torch_geometric
 scipy
 fasttext
+ogb
+pyyaml
