@@ -12,6 +12,7 @@ install the requirements
 pip install -r requirements.txt
 ```
 # Running student
+```bash
 python train_student.py \
   --dataset Citeseer \
   --mode transductive \
@@ -26,8 +27,10 @@ python train_student.py \
   --pgd_iters 5 \
   --temperature 2.0 \
   --device cuda
+```
 
 # Running teacher
+```bash
 python train_teacher.py \
   --num_runs 5 \
   --setting ind \
@@ -39,4 +42,5 @@ python train_teacher.py \
   --batch_sz 1024 \
   --learning_rate 0.005 \
   --output_path ./teacher_outputs
+```
 
